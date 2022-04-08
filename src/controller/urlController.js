@@ -2,6 +2,7 @@ const validUrl = require("valid-url")
 const shortId = require("shortId")
 const urlModel = require("../models/urlModel")
 const baseUrl = "http://localhost:3000"
+const redis = require("redis")
 
 const isValid = function (value) {
     if (typeof value == 'undefined' || value === null) return false
@@ -16,6 +17,25 @@ function validateUrl(value) {
     }
         return true
 }
+
+const { promisify } = require("util");
+
+//Connect to redis
+const redisClient = redis.createClient(
+  10691,
+  "redis-10691.c299.asia-northeast1-1.gce.cloud.redislabs.com",
+  { no_ready_check: true }
+);
+redisClient.auth("rfBe9eGLeqBPiFl1GaGV03ZqThgDPsM7", function (err) {
+  if (err) throw err;
+});
+
+redisClient.on("connect", async function () {
+  console.log("Connected to Redis..");
+});
+
+const SET_ASYNC = promisify(redisClient.SET).bind(redisClient);
+const GET_ASYNC = promisify(redisClient.GET).bind(redisClient);
 
 
 const createurl = async function (req, res) {
@@ -33,9 +53,7 @@ const createurl = async function (req, res) {
         if (!isValid(data.longUrl)) {
             return res.status(400).send({ status: false, msg: "longUrl is required" })
         }
-        // if (!validUrl.isUri(baseUrl)) {
-        //     return res.status(401).send({ status: false, msg: "baseUrl is invalid" })
-        // }
+       
         if (!validateUrl(data.longUrl)) {
             return res.status(401).send({ status: false, msg: "longUrl is invalid" })
         }
@@ -46,10 +64,17 @@ const createurl = async function (req, res) {
             
             data.urlCode = urlCode 
             data.shortUrl = shortUrl
-
+   let catchData= await GET_ASYNC(`${longUrl}`)
+   if(catchData){
+       console.log("redis")
+       let convert= JSON.parse(catchData)
+       return res.status(200).send({msg:"success", data:convert})
+   }
         let isUrlexist= await urlModel.findOne({longUrl}).select({longUrl:1,urlCode:1,shortUrl:1, _id:0})
            if(isUrlexist){
-               return res.status(200).send({msg:"succes", data:isUrlexist})
+               console.log("db")
+            await SET_ASYNC(`${longUrl}`,JSON.stringify(isUrlexist))  
+            return res.status(200).send({msg:"succes", data:isUrlexist})
            }
 
             let data1 = await urlModel.create(data)
@@ -73,15 +98,22 @@ const geturl = async function (req, res) {
         const urlCode = req.params.urlCode
         
         if (!isValid(urlCode)) {
-            res.status(400).send({ status: false, message: 'Please provide valid urlCode' })
+            res.status(400).send({ status: false, message: 'Please provide urlCode' })
         }
-
-        const url = await urlModel.findOne({urlCode })     //second check in Db
+        let catchData= await GET_ASYNC(`${urlCode}`)
+        if(catchData){
+            console.log("redisget")
+            let convert= JSON.parse(catchData)
+            return res.status(301).redirect(convert.longUrl)
+        }
+        const url = await urlModel.findOne({urlCode }) 
+        await SET_ASYNC(`${urlCode}`,JSON.stringify(url))      //second check in Db
         if (!url) {
             return res.status(404).send({ status: false, message: 'No URL Found' })
-        }
+        }else{
+            console.log("mongo")
         return res.status(301).redirect(url.longUrl)
-
+        }
 
     } catch (err) {
         console.error(err)
